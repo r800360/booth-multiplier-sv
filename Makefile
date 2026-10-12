@@ -1,13 +1,20 @@
 # Sequential Booth multiplier: lint, simulation, formal verification, synthesis, equivalence-checking demo.
-# Tools: Verilator >= 5, Icarus Verilog >= 12, Yosys >= 0.30 (with yosys-abc).
+# Toolchain: Icarus Verilog, Verilator, Yosys + yosys-abc (exact versions in scripts/install-tools.sh).
 
 RTL := rtl/booth_mult.sv
 TB  := tb/tb_booth_mult.sv
 RUN := bash scripts/run_sim.sh
 
-.PHONY: all lint sim sim-icarus sim-verilator exhaustive formal synth equivalence clean
+.PHONY: all ci full summary lint sim sim-icarus sim-verilator exhaustive formal formal-quick synth equivalence clean
 
 all: lint sim
+
+# CI entry points (.github/workflows): `make ci` runs on every push, `make full` adds the long runs
+ci: lint sim formal-quick synth equivalence summary
+full: lint sim synth equivalence exhaustive formal summary
+
+summary:
+	@bash scripts/summary.sh > /dev/null && echo "wrote build/SUMMARY.md"
 
 lint:
 	verilator --lint-only -Wall --top-module booth_mult $(RTL)
@@ -43,6 +50,10 @@ exhaustive:
 
 formal:
 	bash formal/run_formal.sh
+
+# N = 4 only (about 20 seconds)
+formal-quick:
+	BOOTH_N=4 bash formal/run_formal.sh
 
 synth:
 	bash scripts/synth.sh

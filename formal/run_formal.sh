@@ -9,6 +9,7 @@ OUT=$OUTD/summary.txt; : > $OUT
 F="rtl/booth_mult.sv formal/booth_mult_formal.sv"
 T=booth_mult_formal
 bad=0
+export TO=${TO:-5400}
 check() {  # expected tag params
   local exp=$1 tag=$2 params=$3
   local r; r=$(bash formal/pdr.sh "$tag" $T "$F" "$params")

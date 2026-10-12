@@ -3,7 +3,7 @@
 #   * proved unsatisfiable ("EQUIVALENT"), or
 #   * every input assignment that distinguishes the two functions is enumerated ("DIFFER, inputs ...").
 cd "$(dirname "$0")/.."
-OUTD=build/equivalence; mkdir -p $OUTD
+OUTD=build/equivalence; mkdir -p $OUTD; : > $OUTD/summary.txt
 for pair in "y0 y1" "z0 z1" "f0 f1"; do
   set -- $pair
   log=$OUTD/$1_$2.log
@@ -13,8 +13,8 @@ for pair in "y0 y1" "z0 z1" "f0 f1"; do
   sols=$(awk '$1 ~ /in_[abcd]$/ { v = v $2 } /Solving problem/ && v != "" { printf "%s ", v; v = "" }
               END { if (v != "") printf "%s ", v }' $log)
   if [ -z "$sols" ] && grep -q "no model found" $log; then
-    echo "$1 == $2: EQUIVALENT (miter unsatisfiable)"
+    echo "$1 == $2: EQUIVALENT (miter unsatisfiable)" | tee -a $OUTD/summary.txt
   else
-    echo "$1 != $2: DIFFER, inputs (A B C D) where they differ: $sols"
+    echo "$1 != $2: DIFFER, inputs (A B C D) where they differ: $sols" | tee -a $OUTD/summary.txt
   fi
 done

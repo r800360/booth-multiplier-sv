@@ -1,136 +1,86 @@
-# Sequential Booth multiplier: three ways to handle the sign, each characterized exactly
+# Booth multiplier: three sign-handling architectures, each with an exactly predicted failure set
 
-A parameterized radix-2 Booth multiplier (N × N → 2N bits, two's complement) with a fully synchronous controller.
-It comes in three architectures that differ only in how the sign of the partial sum is kept. For each one, a short
-argument predicts **exactly** which operand pairs come out wrong, and three independent checks confirm the
-prediction:
-* exhaustive simulation of all 2²⁶ pairs at N = 13;
-* unbounded formal proofs at N = 4 and 6;
-* formal counterexamples when an assumption is removed.
+[![CI](https://github.com/r800360/booth-multiplier-sv/actions/workflows/ci.yml/badge.svg)](https://github.com/r800360/booth-multiplier-sv/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-The repository also includes a small SAT-based logic equivalence checking demo.
+A parameterized, fully synchronous radix-2 Booth multiplier (N × N → 2N bits, two's complement) in SystemVerilog.
+It comes in three architectures that differ only in how the partial sum's sign is kept. For each one, a short
+argument predicts **exactly** which operand pairs come out wrong. The prediction is then confirmed by:
+* exhaustive simulation of all 2²⁶ pairs;
+* unbounded proofs where the architecture is claimed exact;
+* counterexamples where it is not.
 
-## Booth's algorithm and the datapath
-
-Booth recoding turns the multiplier's bit pairs `(q_i, q_(i−1))` (with `q_(−1) = 0`) into digits in {−1, 0, +1}:
-pair `10` subtracts the multiplicand, `01` adds it, and `00` / `11` do nothing. After each step `{A, Q}` shifts right
-arithmetically. The registers are:
-* A, the N-bit accumulator;
-* Q, the multiplier;
-* M, the multiplicand;
-* F1, the previous multiplier bit;
-* F2, the **true sign of the last stored partial sum**, which is shifted into A.
-
-```
-start ──► load ──► N × ( EX: if (Q[0], F1) = 10: A −= M, 01: A += M     SHIFT: {A, Q} >>= 1, F2 → A[N−1], F1 ← Q[0] )
-                                                                                                  ──► done, product = {A, Q}
+```mermaid
+flowchart LR
+  start["start"] --> load["load<br/>A = 0, Q = multiplier,<br/>M = multiplicand"]
+  load --> ex{"Booth pair<br/>(Q[0], F1)"}
+  ex -->|"10"| sub["A -= M"]
+  ex -->|"01"| add["A += M"]
+  ex -->|"00 / 11"| shift
+  sub --> shift["shift {F2, A, Q} right,<br/>F1 = Q[0]"]
+  add --> shift
+  shift -->|"N times"| ex
+  shift --> done["done, product = {A, Q}<br/>after 2N + 1 cycles"]
 ```
 
-`done` rises exactly 2N + 1 edges after the start edge (27 for N = 13). `start` is ignored while busy. The product
-and `done` hold until the next start.
+## The idea
 
-## The sign problem
+An N-bit accumulator cannot always hold the sign of the partial sum, so a separate bit F2 keeps it. After k steps, the
+stored partial sum is `M · x_k / 2^(k−1)`, where x_k is the low k multiplier bits read as a signed number. Since
+`|x_k| ≤ 2^(k−1)`, **every partial sum has magnitude ≤ |M|**, and its sign follows from M and the Booth digit.
 
-An N-bit accumulator cannot always hold the partial sum's sign. Suppose that after k steps the low k multiplier
-bits, read as a k-bit signed number, have the value `x_k`. The stored partial sum is then `M · x_k / 2^(k−1)`. Since
-`|x_k| ≤ 2^(k−1)`:
+| Architecture | F2 = | Cells (N = 13) | Predicted wrong products |
+|---|---|--:|---|
+| **wide** | bit N of an (N+1)-bit adder | 251 | none |
+| **narrow** | bit N−1 of an N-bit adder | 243 | exactly multiplicand = −2^(N−1) with multiplier ≠ 0 |
+| **sign rule** | multiplicand sign ⊕ subtract (one XOR) | 245 | exactly multiplicand = 0 with multiplier ≠ 0 |
+| sign rule + zero detect | the same, forced to 0 for a zero multiplicand | 258 | none |
 
-> **every stored partial sum has magnitude ≤ |M|**, and it is non-zero with the sign of M times the sign of the
-> Booth digit, unless M = 0.
+The narrow adder saves only 8 gates (3 %), and making the sign rule exact again costs more than the wider adder. The
+(N+1)-bit adder is the simplest exact design.
 
-That gives three architectures (`ARCH`):
+## Results
 
-| ARCH | F2 = | Cost (N = 13, Yosys cells incl. 48–49 flip-flops) | Predicted wrong products |
-|---|---|---|---|
-| 0 **wide** | bit N of an (N+1)-bit adder | 251 cells | **none** |
-| 1 **narrow** | bit N−1 of an N-bit adder | 243 cells | exactly the pairs with **M = −2^(N−1) and multiplier ≠ 0**. Only that M makes \|partial sum\| = 2^(N−1) (the first subtraction, 0 − M) |
-| 2 **sign rule** | `M[N−1] ⊕ SUB` (one XOR) | 245 cells | exactly the pairs with **M = 0 and multiplier ≠ 0**: the rule injects 1s although the sum is 0 |
-| 2 + `ZERO_DETECT` | the sign rule, forced to 0 for M = 0 | 258 cells | **none** |
+| Check | Result |
+|---|---|
+| **All 67 108 864 pairs at N = 13**, each architecture (Verilator) | wrong exactly on the predicted pairs: 0, 8 191, 8 191 and 0 |
+| Corner, random, timing and robustness tests (Icarus and Verilator) | pass; `done` exactly 2N + 1 cycles after start |
+| PDR proofs: wide and zero-detect exact for all operands; narrow exact when multiplicand ≠ −2^(N−1); sign rule exact when multiplicand ≠ 0 | **proved unbounded** for N = 4 and N = 6 |
+| The same without the assumption | counterexample, for N = 4 and N = 6 |
+| SAT equivalence-checking demo | two equivalences proved; one pair found to differ on exactly 2 inputs |
 
-The narrow adder saves 8 gates (3 %). Making the sign rule exact again costs more than the wider adder. The
-(N+1)-bit adder is the simplest exact design, and the others are useful mainly as a lesson in *why* they fail.
+## Reproduce
 
-## Verification
-
-### Simulation: `tb/tb_booth_mult.sv`
-
-The reference is `$signed(M) * $signed(Q)`. Every product is also checked for exact timing: busy for 2N cycles,
-`done` on the (2N + 1)-th edge, product and `done` held afterwards. Each architecture is compared with its
-*predicted* set of wrong products. A wrong product outside the set fails the test, and so does a predicted-wrong
-product that comes out right.
-
-| Run | Wide | Narrow | Sign rule | Sign rule + zero detect |
-|---|---|---|---|---|
-| 169 corner pairs (0, ±1, ±2, max, −max, min, ±2^(N−2), alternating patterns) | pass | pass (12 predicted wrong) | pass (12) | pass |
-| 3 000 random pairs, with extra min and 0 multiplicands (300 000 with Verilator) | pass | pass | pass | pass |
-| Hold after `done`; start pulses and operand changes while busy; reset mid-operation | pass | pass | pass | pass |
-| **Exhaustive, N = 13: all 67 108 864 pairs** (`make exhaustive`, Verilator) | pass | pass: exactly the **8 191** predicted pairs wrong | pass: exactly **8 191** | pass |
-| Exhaustive, N = 6: all 4 096 pairs (Icarus and Verilator) | pass | pass (63) | pass (63) | pass |
-
-### Formal: `make formal` (Yosys + ABC PDR)
-
-`formal/booth_mult_formal.sv` captures the operands at every accepted start and asserts, for every start and reset
-pattern:
-* the exact latency;
-* `product == M × Q` once `done`;
-* idle after reset.
-
-Optional assumptions restrict the operands to where an architecture is claimed exact.
-
-| Proof | N = 4 | N = 6 |
-|---|---|---|
-| wide, all operands | proved (3 s) | proved (242 s) |
-| sign rule + zero detect, all operands | proved (2 s) | proved (235 s) |
-| narrow, assuming M ≠ −2^(N−1) | proved (2 s) | proved (213 s) |
-| narrow, all operands | **counterexample** (frame 10) | **counterexample** (frame 14) |
-| sign rule without zero detect, assuming M ≠ 0 | proved (3 s) | proved (226 s) |
-| sign rule without zero detect, all operands | **counterexample** (frame 10) | **counterexample** (frame 14) |
-
-So each predicted exception is both sufficient (the proof holds without it) and necessary (removing the assumption
-gives a counterexample).
-
-## Equivalence checking demo: `make equivalence`
-
-`equivalence/check.sh` builds a miter (`y_left xor y_right`) for each pair of functions in
-`equivalence/functions.sv`. It then either proves the miter unsatisfiable with Yosys's SAT solver, or enumerates
-every input on which the two functions differ:
-
-```
-y0 != y1: DIFFER, inputs (A B C D) where they differ: 0110 0001
-z0 == z1: EQUIVALENT (miter unsatisfiable)
-f0 == f1: EQUIVALENT (miter unsatisfiable)
-```
-
-The three pairs are:
-* `Y0 = (A+B)(C'+D)(A+C')` and `Y1 = AC' + AD + C'D + A'BD'`, which differ exactly on ABCD = 0001 and 0110;
-* `Z0 = B'(A+C)(A'+C')` and `Z1 = AB'C' + A'B'C`, which are both `B'(A ⊕ C)`;
-* `F0 = (A ⊕ B) ⊙ C` and `F1 = (A'B + AB')C + (AB + A'B')C'`.
-
-## Repository layout
-
-```
-rtl/booth_mult.sv              the multiplier (parameters N, ARCH, ZERO_DETECT)
-tb/tb_booth_mult.sv            self-checking testbench (+ tb_common.svh)
-formal/booth_mult_formal.sv    properties; pdr.sh, run_formal.sh (proofs and counterexamples with expected outcomes)
-equivalence/                   functions.sv, check.sh
-scripts/                       run_sim.sh, synth.sh
-```
-
-## Running
+Every result comes from a pinned toolchain: Ubuntu 26.04 with Icarus Verilog 12.0, Verilator 5.032 and Yosys 0.52
+(see [`scripts/install-tools.sh`](scripts/install-tools.sh)).
 
 ```bash
-make                 # lint, Icarus and Verilator simulation of all architectures
-make exhaustive      # all 2^26 pairs per architecture (Verilator, several minutes each)
-make formal          # PDR proofs, N = 4 and 6 (BOOTH_N="4" for the fast subset)
-make synth           # gate counts for N = 8, 13, 16
-make equivalence     # SAT equivalence checking demo
+docker build -t booth-multiplier-sv .
+docker run --rm -u "$(id -u):$(id -g)" -v "$PWD":/work booth-multiplier-sv make ci     # ~3 minutes
+docker run --rm -u "$(id -u):$(id -g)" -v "$PWD":/work booth-multiplier-sv make full   # + exhaustive, N = 6 proofs
 ```
 
-Requirements: Verilator 5, Icarus Verilog 12, Yosys ≥ 0.30 with yosys-abc. Tested with Verilator 5.032, Icarus 12.0
-and Yosys 0.52.
+`build/SUMMARY.md` collects every result. The targets are:
+* `lint`, `sim`;
+* `exhaustive`: all 2²⁶ pairs per architecture;
+* `formal` (N = 4 and 6) and `formal-quick` (N = 4);
+* `synth` (N = 8, 13 and 16);
+* `equivalence`.
 
-## Background
+The *CI* workflow runs `make ci` on every push. *Full verification* runs `make full` on demand or for a `v*` tag, and
+a tag also publishes a release with all outputs.
 
-This design started as a university digital-design lab assignment, built as schematics around a provided,
-clock-gated controller. This repository is a from-scratch, fully synchronous re-implementation in SystemVerilog. It
-adds the exact characterization of each architecture, proven formally and confirmed exhaustively.
+## Repository map
+
+```
+rtl/booth_mult.sv     the multiplier (parameters N, ARCH, ZERO_DETECT)
+tb/                   self-checking testbench, tb_common.svh
+formal/               harness with optional operand assumptions, pdr.sh, run_formal.sh (expected outcomes)
+equivalence/          SAT equivalence-checking demo (functions.sv, check.sh)
+docs/                 DESIGN.md (the bound and each architecture), VERIFICATION.md (every check, tool invocations)
+```
+
+Origin: this design began as an assignment in a university digital-design course. This repository is an independent,
+fully synchronous SystemVerilog re-implementation with its own analysis and verification.
+
+MIT License, © 2026 Rohan Sachdeva.
